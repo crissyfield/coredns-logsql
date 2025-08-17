@@ -13,14 +13,14 @@
 ...
 
 ```txt
-logsql
+logsql [dialect] [dsn]
 ```
 
 ## Examples
 
 ```corefile
 . {
-    logsql
+    logsql pgx postgres://localhost/dns
     whoami
 }
 ```
