@@ -3,7 +3,6 @@ package logsql
 import (
 	"embed"
 	"fmt"
-	"log/slog"
 
 	"github.com/coredns/caddy"
 	"github.com/coredns/coredns/core/dnsserver"
@@ -39,8 +38,7 @@ func setup(c *caddy.Controller) error {
 
 	// ...
 	dnsserver.GetConfig(c).AddPlugin(func(next plugin.Handler) plugin.Handler {
-		slog.Info("[logsql] add plugin")
-		return LogSql{Next: next}
+		return LogSql{Next: next, DB: db}
 	})
 
 	return nil
@@ -87,6 +85,8 @@ func runMigrations(db *sqlx.DB) error {
 		return fmt.Errorf("create source driver: %w", err)
 	}
 
+	defer sd.Close()
+
 	// Create database database driver
 	dd, err := postgres.WithInstance(db.DB, &postgres.Config{})
 	if err != nil {
@@ -98,8 +98,6 @@ func runMigrations(db *sqlx.DB) error {
 	if err != nil {
 		return fmt.Errorf("create migrate instance: %w", err)
 	}
-
-	defer mi.Close()
 
 	// Run migrations
 	err = mi.Up()
