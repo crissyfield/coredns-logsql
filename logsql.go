@@ -31,28 +31,32 @@ func (ls LogSql) Name() string {
 
 // ServeDNS implements the plugin.Handler interface.
 func (ls LogSql) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
+	// Call next plugin
+	rw := &ResponseWriter{ResponseWriter: w}
+
+	val, err := plugin.NextOrFailure(ls.Name(), ls.Next, ctx, rw, r)
+
 	// Insert into database
-	err := ls.insertIntoDB(ctx, r.Question)
-	if err != nil {
-		slog.Error("logsql: failed to insert request into database: ", slog.Any("question", r.Question), slog.Any("error", err))
+	errDB := ls.insertIntoDB(ctx, rw.Domains)
+	if errDB != nil {
+		slog.Error("logsql: failed to insert request into database: ", slog.Any("question", r.Question), slog.Any("error", errDB))
 	}
 
-	// Call next plugin
-	return plugin.NextOrFailure(ls.Name(), ls.Next, ctx, w, r)
+	return val, err
 }
 
 // ...
-func (ls LogSql) insertIntoDB(ctx context.Context, question []dns.Question) error {
-	// Early return if there are no questions in the request
-	if len(question) == 0 {
+func (ls LogSql) insertIntoDB(ctx context.Context, domains []string) error {
+	// Early return if there are no domains
+	if len(domains) == 0 {
 		return nil
 	}
 
 	// Insert record into database
-	requests := make([]Request, 0, len(question))
-	for _, q := range question {
+	requests := make([]Request, 0, len(domains))
+	for _, d := range domains {
 		requests = append(requests, Request{
-			Domain:    q.Name,
+			Domain:    d,
 			CreatedAt: time.Now(),
 			UpdatedAt: time.Now(),
 		})
@@ -60,7 +64,7 @@ func (ls LogSql) insertIntoDB(ctx context.Context, question []dns.Question) erro
 
 	query, args, err := sqlx.Named(
 		`
-			INSERT INTO "requests" (
+			INSERT INTO "answers" (
 				"domain",
 				"created_at",
 				"updated_at"
