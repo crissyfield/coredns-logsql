@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/coredns/coredns/plugin"
@@ -61,6 +63,11 @@ func (ls LogSql) insertIntoDB(ctx context.Context, domains []string) error {
 			UpdatedAt: time.Now(),
 		})
 	}
+
+	// Prevent deadlocks by forcing a stable order
+	slices.SortStableFunc(requests, func(l Request, r Request) int {
+		return strings.Compare(l.Domain, r.Domain)
+	})
 
 	query, args, err := sqlx.Named(
 		`
