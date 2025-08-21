@@ -32,12 +32,12 @@ func (ls LogSql) Name() string {
 // ServeDNS implements the plugin.Handler interface.
 func (ls LogSql) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
 	// Call next plugin
-	rw := &ResponseWriter{ResponseWriter: w}
+	rw := NewResponseWriter(w)
 
 	val, err := plugin.NextOrFailure(ls.Name(), ls.Next, ctx, rw, r)
 
 	// Insert into database
-	errDB := ls.insertIntoDB(ctx, rw.Domains)
+	errDB := ls.insertIntoDB(ctx, rw.Domains())
 	if errDB != nil {
 		slog.Error("logsql: failed to insert request into database: ", slog.Any("question", r.Question), slog.Any("error", errDB))
 	}
