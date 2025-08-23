@@ -17,13 +17,12 @@ import (
 //go:embed migrations
 var migrationFS embed.FS
 
-// ...
 func init() {
 	// Register plugin
 	plugin.Register("logsql", setup)
 }
 
-// ...
+// setup sets up the logsql plugin.
 func setup(c *caddy.Controller) error {
 	// Parse configuration
 	db, err := parseConfig(c)
@@ -36,9 +35,18 @@ func setup(c *caddy.Controller) error {
 		return plugin.Error("logsql", fmt.Errorf("run migrations: %w", err))
 	}
 
-	// ...
+	// Add plugin to the chain
 	dnsserver.GetConfig(c).AddPlugin(func(next plugin.Handler) plugin.Handler {
-		return LogSql{Next: next, DB: db}
+		// Create LogSql instance
+		ls := NewLogSql(next, db)
+
+		// Register shutdown function to close plugin
+		c.OnShutdown(func() error {
+			ls.Close()
+			return nil
+		})
+
+		return ls
 	})
 
 	return nil

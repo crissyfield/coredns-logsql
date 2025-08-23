@@ -13,22 +13,61 @@ import (
 	"github.com/miekg/dns"
 )
 
-// LogSql ...
+const (
+	// DomainChannelBufferSize is the size of the channel buffer for domains.
+	DomainChannelBufferSize = 1024
+)
+
+// LogSql is a plugin that logs DNS queries to a SQL database.
 type LogSql struct {
-	Next plugin.Handler
-	DB   *sqlx.DB
+	Next      plugin.Handler // Next plugin in the chain
+	DB        *sqlx.DB       // Database connection
+	domainsCh chan []string  // Channel for sending domains to background goroutine
+	doneCh    chan struct{}  // Channel to signal background goroutine to stop
 }
 
-// Request ...
+// Request represents a DNS request record in the database.
 type Request struct {
-	Domain    string    `db:"domain"`
-	CreatedAt time.Time `db:"created_at"`
-	UpdatedAt time.Time `db:"updated_at"`
+	Domain    string    `db:"domain"`     // Domain name
+	CreatedAt time.Time `db:"created_at"` // Timestamp of creation
+	UpdatedAt time.Time `db:"updated_at"` // Timestamp of last update
+}
+
+// NewLogSql creates a new LogSql instance.
+func NewLogSql(next plugin.Handler, db *sqlx.DB) *LogSql {
+	// Initialize LogSql
+	ls := &LogSql{
+		Next:      next,
+		DB:        db,
+		domainsCh: make(chan []string, DomainChannelBufferSize),
+		doneCh:    make(chan struct{}),
+	}
+
+	// Spin up background goroutine to handle database inserts
+	go func() {
+		defer close(ls.doneCh)
+
+		for domains := range ls.domainsCh {
+			err := ls.insertIntoDB(domains)
+			if err != nil {
+				slog.Error("[logsql] Failed to insert domains into database", slog.Any("error", err))
+			}
+		}
+	}()
+
+	return ls
 }
 
 // Name implements the plugin Handler interface.
 func (ls LogSql) Name() string {
 	return "logsql"
+}
+
+// Close gracefully shuts down the plugin.
+func (ls *LogSql) Close() {
+	// Signal background goroutine to stop and wait for it to finish
+	close(ls.domainsCh)
+	<-ls.doneCh
 }
 
 // ServeDNS implements the plugin.Handler interface.
@@ -38,23 +77,20 @@ func (ls LogSql) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg)
 
 	val, err := plugin.NextOrFailure(ls.Name(), ls.Next, ctx, rw, r)
 
-	// Insert into database
-	errDB := ls.insertIntoDB(ctx, rw.Domains())
-	if errDB != nil {
-		slog.Error("logsql: failed to insert request into database: ", slog.Any("question", r.Question), slog.Any("error", errDB))
-	}
+	// Send domains to background goroutine for database insertion
+	ls.domainsCh <- rw.Domains()
 
 	return val, err
 }
 
-// ...
-func (ls LogSql) insertIntoDB(ctx context.Context, domains []string) error {
+// insertIntoDB inserts the given domains into the database.
+func (ls LogSql) insertIntoDB(domains []string) error {
 	// Early return if there are no domains
 	if len(domains) == 0 {
 		return nil
 	}
 
-	// Insert record into database
+	// Prepare requests
 	requests := make([]Request, 0, len(domains))
 	for _, d := range domains {
 		requests = append(requests, Request{
@@ -69,6 +105,7 @@ func (ls LogSql) insertIntoDB(ctx context.Context, domains []string) error {
 		return strings.Compare(l.Domain, r.Domain)
 	})
 
+	// Insert record into database
 	query, args, err := sqlx.Named(
 		`
 			INSERT INTO "answers" (
@@ -92,12 +129,7 @@ func (ls LogSql) insertIntoDB(ctx context.Context, domains []string) error {
 		return fmt.Errorf("failed to prepare named query: %w", err)
 	}
 
-	_, err = ls.DB.ExecContext(
-		ctx,
-		ls.DB.Rebind(query),
-		args...,
-	)
-
+	_, err = ls.DB.Exec(ls.DB.Rebind(query), args...)
 	if err != nil {
 		return fmt.Errorf("failed to execute named query: %w", err)
 	}
