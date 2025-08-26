@@ -8,10 +8,13 @@ import (
 	"github.com/coredns/coredns/core/dnsserver"
 	"github.com/coredns/coredns/plugin"
 	"github.com/golang-migrate/migrate/v4"
+	"github.com/golang-migrate/migrate/v4/database"
 	"github.com/golang-migrate/migrate/v4/database/postgres"
+	"github.com/golang-migrate/migrate/v4/database/sqlite3"
 	"github.com/golang-migrate/migrate/v4/source/iofs"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/jmoiron/sqlx"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 //go:embed migrations
@@ -24,15 +27,10 @@ func init() {
 
 // setup sets up the logsql plugin.
 func setup(c *caddy.Controller) error {
-	// Parse configuration
-	db, err := parseConfig(c)
+	// Create database connection from config
+	db, err := createDBFromConfig(c)
 	if err != nil {
-		return plugin.Error("logsql", fmt.Errorf("parse config: %w", err))
-	}
-
-	// Run migrations
-	if err := runMigrations(db); err != nil {
-		return plugin.Error("logsql", fmt.Errorf("run migrations: %w", err))
+		return plugin.Error("logsql", fmt.Errorf("create database from config: %w", err))
 	}
 
 	// Add plugin to the chain
@@ -52,8 +50,8 @@ func setup(c *caddy.Controller) error {
 	return nil
 }
 
-// parseConfig parses the configuration for the logsql plugin.
-func parseConfig(c *caddy.Controller) (*sqlx.DB, error) {
+// createDBFromConfig creates a database connection from the plugin configuration.
+func createDBFromConfig(c *caddy.Controller) (*sqlx.DB, error) {
 	// Skip plugin name directive
 	c.Next()
 
@@ -76,17 +74,43 @@ func parseConfig(c *caddy.Controller) (*sqlx.DB, error) {
 		return nil, fmt.Errorf("unexpected argument after DSN: %w", c.ArgErr())
 	}
 
-	// Create database connection
-	db, err := sqlx.Open(dialect, dsn)
-	if err != nil {
-		return nil, fmt.Errorf("create database connection: %w", err)
+	// Create database connection based on dialect
+	var db *sqlx.DB
+
+	switch dialect {
+	case "postgres":
+		// Postgres
+		d, err := sqlx.Open("pgx", dsn)
+		if err != nil {
+			return nil, fmt.Errorf("create postgres connection: %w", err)
+		}
+
+		db = d
+
+	case "sqlite3":
+		// SQLite3
+		d, err := sqlx.Open("sqlite3", dsn)
+		if err != nil {
+			return nil, fmt.Errorf("create sqlite3 connection: %w", err)
+		}
+
+		db = d
+
+	default:
+		// Unsupported dialect
+		return nil, fmt.Errorf("unsupported dialect: %s", dialect)
+	}
+
+	// Run migrations
+	if err := runMigrations(db, dialect); err != nil {
+		return nil, fmt.Errorf("run migrations: %w", err)
 	}
 
 	return db, nil
 }
 
 // runMigrations runs database migrations using golang-migrate
-func runMigrations(db *sqlx.DB) error {
+func runMigrations(db *sqlx.DB, dialect string) error {
 	// Create source driver
 	sd, err := iofs.New(migrationFS, "migrations")
 	if err != nil {
@@ -95,14 +119,36 @@ func runMigrations(db *sqlx.DB) error {
 
 	defer sd.Close()
 
-	// Create database database driver
-	dd, err := postgres.WithInstance(db.DB, &postgres.Config{})
-	if err != nil {
-		return fmt.Errorf("create database driver: %w", err)
+	// Create database driver based on dialect
+	var dd database.Driver
+	var databaseName string
+
+	switch dialect {
+	case "postgres":
+		// Postgres
+		dd, err = postgres.WithInstance(db.DB, &postgres.Config{})
+		if err != nil {
+			return fmt.Errorf("create postgres driver: %w", err)
+		}
+
+		databaseName = "postgres"
+
+	case "sqlite3":
+		// SQLite3
+		dd, err = sqlite3.WithInstance(db.DB, &sqlite3.Config{})
+		if err != nil {
+			return fmt.Errorf("create sqlite3 driver: %w", err)
+		}
+
+		databaseName = "sqlite3"
+
+	default:
+		// Unsupported dialect
+		return fmt.Errorf("unsupported dialect: %s", dialect)
 	}
 
 	// Create migrate instance
-	mi, err := migrate.NewWithInstance("iofs", sd, "postgres", dd)
+	mi, err := migrate.NewWithInstance("iofs", sd, databaseName, dd)
 	if err != nil {
 		return fmt.Errorf("create migrate instance: %w", err)
 	}

@@ -13,7 +13,7 @@ Domains are "upserted" into the database, meaning that if a domain already exist
 timestamp is updated for the existing database row. This allows you to track both when domains were first
 queried and when they were last seen.
 
-Currently, the plugin supports PostgreSQL databases through the `pgx` driver.
+Currently, the plugin supports PostgreSQL and SQLite3 databases.
 
 ## Syntax
 
@@ -21,7 +21,7 @@ Currently, the plugin supports PostgreSQL databases through the `pgx` driver.
 logsql DIALECT DSN
 ```
 
-- **DIALECT** is the database dialect to use (currently supports `pgx` for PostgreSQL)
+- **DIALECT** is the database dialect to use (`postgres` or `sqlite3`)
 - **DSN** is the Data Source Name (connection string) for your database
 
 ## Examples
@@ -30,7 +30,16 @@ Log all DNS queries to a PostgreSQL database:
 
 ```corefile
 . {
-    logsql pgx postgres://user:password@localhost/dns_logs
+    logsql postgres postgres://user:password@localhost/dns_logs
+    forward . 8.8.8.8
+}
+```
+
+Log all DNS queries to a SQLite database:
+
+```corefile
+. {
+    logsql sqlite3 ./dns_logs.db
     forward . 8.8.8.8
 }
 ```
